@@ -2,7 +2,7 @@ import { useEffect } from 'react';
 import { Box, Grid, Card, CardContent, Typography, Avatar } from '@mui/material';
 import { useAppStore } from '../store/useAppStore';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, PieChart, Pie, Cell } from 'recharts';
-import { TrendingUp, ShoppingBag, ListCollapse, Award, Lightbulb } from 'lucide-react';
+import { TrendingUp, ShoppingBag, ListCollapse, Lightbulb } from 'lucide-react';
 
 const COLORS = ['#6750A4', '#03DAC6', '#FF007A', '#3F51B5', '#FF9800', '#4CAF50', '#9C27B0'];
 

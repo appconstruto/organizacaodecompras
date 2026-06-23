@@ -241,23 +241,8 @@ export const useAppStore = create<AppState>((set, get) => ({
       // We will identify products with price fluctuations or high consumption patterns
       const newInsights: Array<{ tipo: string; titulo: string; descricao: string }> = [];
 
-      // Example 1: High frequency purchase
-      if (state.purchases.length >= 2) {
-        newInsights.push({
-          tipo: 'consumo',
-          titulo: 'Padrão de Compra de Café',
-          descricao: 'Você compra café a cada 11 dias em média. Próxima compra estimada para breve.'
-        });
-      }
-
-      // Example 2: Best market recommendation
-      if (state.products.length > 0) {
-        newInsights.push({
-          tipo: 'economia',
-          titulo: 'Economia Potencial',
-          descricao: 'Leite Integral costuma ser 12% mais barato no Supermercado Penha do que nos demais concorrentes.'
-        });
-      }
+      // Only generate real dynamic insights from actual purchase history if there is any data
+      // For V1, dynamic insights will be generated after more than 2 real purchases are registered.
 
       // Save generated insights to Supabase
       for (const ins of newInsights) {

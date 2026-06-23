@@ -45,28 +45,58 @@ function parseTextReceipt(text: string): { itens: OcrResult['itens']; valorTotal
   const itens: OcrResult['itens'] = [];
   let valorTotal = 0;
 
-  // Simple regex lines parser
+  // Regexes to support multiple layouts
+  // 1. With X or *: e.g. "001 CAFE PILAO 500G 2 UN X 15,20 30,40"
+  const regexWithX = /(.+?)\s+(\d+[,.]?\d*)\s*(UN|KG|LT|ML|G|PC|FD|CX)?\s*[xX*]\s*(\d+[,.]\d{2})/i;
+
+  // 2. Without X/multiplier, with explicit unit: e.g. "858517 SANJER FARELO AVEIA 200 1,000 UN 3,99 3,99"
+  const regexWithoutX = /(.+?)\s+(\d+[,.]\d{2,3}|\d+)\s*(UN|KG|LT|ML|G|PC|FD|CX)\s+(\d+[,.]\d{2})\s+(\d+[,.]\d{2})/i;
+
+  // 3. Simple space-separated: e.g. "PRODUCT DESCRIPTION 1.0 5.90 5.90"
+  const regexSimple = /(.+?)\s+(\d+[,.]?\d*)\s+(\d+[,.]\d{2})\s+(\d+[,.]\d{2})/i;
+
   for (const line of lines) {
-    if (!line.trim()) continue;
+    const trimmedLine = line.trim();
+    if (!trimmedLine) continue;
 
     // Skip header typical keywords
-    if (/cnpj|focal|sefaz|cupom|nfc|data|inscricao/i.test(line)) continue;
+    if (/cnpj|focal|sefaz|cupom|nfc|data|inscricao|vias|cliente|cpf|consumidor|protocolo|tributos/i.test(trimmedLine)) continue;
 
-    // Pattern: Item name followed by quantity, unit, and prices
-    // Example: "001 CAFE PILAO 500G 2 UN X 15,20 30,40"
-    const regex = /(.+?)\s+(\d+[,.]?\d*)\s*(UN|KG|LT|ML|G)?\s*[xX*]\s*(\d+[,.]\d{2})/i;
-    const match = line.match(regex);
+    let match = trimmedLine.match(regexWithX);
+    let desc = '';
+    let qty = 0;
+    let unit = 'UN';
+    let price = 0;
 
     if (match) {
-      let desc = match[1].trim();
-      // Clean up item numbers if prefix
-      desc = desc.replace(/^\d+\s+/, '');
+      desc = match[1].trim();
+      qty = parseFloat(match[2].replace(',', '.'));
+      unit = match[3] ? match[3].toUpperCase() : 'UN';
+      price = parseFloat(match[4].replace(',', '.'));
+    } else {
+      match = trimmedLine.match(regexWithoutX);
+      if (match) {
+        desc = match[1].trim();
+        qty = parseFloat(match[2].replace(',', '.'));
+        unit = match[3].toUpperCase();
+        price = parseFloat(match[4].replace(',', '.'));
+      } else {
+        match = trimmedLine.match(regexSimple);
+        if (match) {
+          desc = match[1].trim();
+          qty = parseFloat(match[2].replace(',', '.'));
+          unit = 'UN';
+          price = parseFloat(match[3].replace(',', '.'));
+        }
+      }
+    }
 
-      const qty = parseFloat(match[2].replace(',', '.'));
-      const unit = match[3] ? match[3].toUpperCase() : 'UN';
-      const price = parseFloat(match[4].replace(',', '.'));
+    if (match && desc && qty > 0 && price > 0) {
+      // Clean up item code prefix if it exists (e.g., "858517 SANJER..." -> "SANJER...")
+      desc = desc.replace(/^\d{3,12}\s+/, '');
 
-      if (desc && qty > 0 && price > 0) {
+      // Prevent matching totals, changes, or payments as items
+      if (!/total|troco|pagamento|cartao|dinheiro|valor|incidentes/i.test(desc)) {
         itens.push({
           descricao: desc,
           quantidade: qty,

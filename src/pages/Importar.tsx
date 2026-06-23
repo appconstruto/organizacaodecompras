@@ -1,11 +1,11 @@
-import { useRef, useState } from 'react';
-import { Box, Typography, Card, CardContent, Button, Tabs, Tab, TextField, Alert, CircularProgress, Divider, Paper, Table, TableBody, TableCell, TableContainer, TableHead, TableRow, Grid } from '@mui/material';
+import { useRef, useState, useEffect } from 'react';
+import { Box, Typography, Card, CardContent, Button, Tabs, Tab, TextField, Alert, CircularProgress, Divider, Paper, Table, TableBody, TableCell, TableContainer, TableHead, TableRow, Grid, IconButton } from '@mui/material';
 import { QrReader } from './QrReader'; // We will create a clean component for camera QR scanning
 import { parseNfcUrl } from '../services/nfcParser';
 import type { ParsedNFCe } from '../services/nfcParser';
 import { processReceiptImage } from '../services/ocrService';
 import { useAppStore } from '../store/useAppStore';
-import { Camera, FileText, ImageIcon, CheckCircle, ShieldAlert } from 'lucide-react';
+import { Camera, FileText, ImageIcon, CheckCircle, ShieldAlert, Trash2, Plus } from 'lucide-react';
 
 export default function Importar() {
   const { importNfc, loading: storeLoading, error: storeError } = useAppStore();
@@ -19,11 +19,24 @@ export default function Importar() {
   
   // Parsed Result View State
   const [parsedData, setParsedData] = useState<ParsedNFCe | null>(null);
+  const [editableItens, setEditableItens] = useState<ParsedNFCe['itens']>([]);
   const [importSuccess, setImportSuccess] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [localLoading, setLocalLoading] = useState(false);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // Synchronize editable items state with parsed data
+  useEffect(() => {
+    if (parsedData) {
+      setEditableItens(parsedData.itens);
+    } else {
+      setEditableItens([]);
+    }
+  }, [parsedData]);
+
+  // Dynamically calculate the total price based on editable items
+  const totalCalculado = editableItens.reduce((sum, item) => sum + (item.quantidade * item.valorUnitario), 0);
 
   const handleTabChange = (_event: any, newValue: number) => {
     setActiveTab(newValue);
@@ -59,7 +72,7 @@ export default function Importar() {
         setTimeout(() => {
           const parsedMock: ParsedNFCe = {
             chaveAcesso: 'PDF' + Math.floor(Math.random() * 10000000000000000),
-            numeroNf: Math.floor(Math.random() * 1000).toString(),
+            numeroNf: Math.floor(Math.random() * 100).toString(),
             serie: '1',
             cnpjEmitente: '12.345.678/0001-90',
             dataEmissao: new Date(),
@@ -79,7 +92,7 @@ export default function Importar() {
         
         const parsedMock: ParsedNFCe = {
           chaveAcesso: 'IMG' + Math.floor(Math.random() * 10000000000000000),
-          numeroNf: Math.floor(Math.random() * 1000).toString(),
+          numeroNf: Math.floor(Math.random() * 100).toString(),
           serie: '1',
           cnpjEmitente: '98.765.432/0001-10',
           dataEmissao: new Date(),
@@ -95,11 +108,45 @@ export default function Importar() {
     }
   };
 
+  const handleEditItem = (index: number, field: keyof ParsedNFCe['itens'][0], value: any) => {
+    setEditableItens(prev => prev.map((item, idx) => {
+      if (idx === index) {
+        if (field === 'quantidade' || field === 'valorUnitario') {
+          const numVal = value === '' ? 0 : parseFloat(value);
+          return { ...item, [field]: isNaN(numVal) ? 0 : numVal };
+        }
+        return { ...item, [field]: value };
+      }
+      return item;
+    }));
+  };
+
+  const handleRemoveItem = (index: number) => {
+    setEditableItens(prev => prev.filter((_, idx) => idx !== index));
+  };
+
+  const handleAddItem = () => {
+    setEditableItens(prev => [
+      ...prev,
+      { descricao: '', quantidade: 1, unidade: 'UN', valorUnitario: 0 }
+    ]);
+  };
+
   const handleConfirmImport = async () => {
     if (!parsedData) return;
+    if (editableItens.length === 0) {
+      setErrorMessage('A nota fiscal precisa ter pelo menos um item.');
+      return;
+    }
     
     const sourceMethod = activeTab === 0 ? 'qrcode' : activeTab === 1 ? 'pdf' : 'ocr';
-    const success = await importNfc(parsedData, sourceMethod);
+    const finalData: ParsedNFCe = {
+      ...parsedData,
+      itens: editableItens,
+      valorTotal: totalCalculado
+    };
+
+    const success = await importNfc(finalData, sourceMethod);
     
     if (success) {
       setImportSuccess(true);
@@ -227,7 +274,7 @@ export default function Importar() {
                 <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 2 }}>
                   <Typography variant="h6" sx={{ fontWeight: 'bold' }}>Confirme a Importação</Typography>
                   <Typography variant="h6" color="primary.main" sx={{ fontWeight: 'bold' }}>
-                    R$ {parsedData.valorTotal.toFixed(2)}
+                    R$ {totalCalculado.toFixed(2)}
                   </Typography>
                 </Box>
 
@@ -252,26 +299,96 @@ export default function Importar() {
 
                 <Divider sx={{ my: 2 }} />
 
-                <Typography variant="subtitle2" sx={{ fontWeight: 'bold', mb: 1 }}>Itens Encontrados</Typography>
-                <TableContainer component={Paper} variant="outlined" sx={{ borderRadius: 2, maxHeight: 250, mb: 3 }}>
+                <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 1 }}>
+                  <Typography variant="subtitle2" sx={{ fontWeight: 'bold' }}>Itens Encontrados</Typography>
+                  <Button 
+                    size="small" 
+                    variant="outlined" 
+                    startIcon={<Plus size={16} />} 
+                    onClick={handleAddItem}
+                    sx={{ borderRadius: 2 }}
+                  >
+                    Adicionar Item
+                  </Button>
+                </Box>
+
+                <TableContainer component={Paper} variant="outlined" sx={{ borderRadius: 2, maxHeight: 300, mb: 3 }}>
                   <Table size="small" stickyHeader>
                     <TableHead>
                       <TableRow>
                         <TableCell>Descrição</TableCell>
-                        <TableCell align="right">Qtd</TableCell>
-                        <TableCell align="right">Valor Unit</TableCell>
-                        <TableCell align="right">Total</TableCell>
+                        <TableCell align="right" sx={{ width: 80 }}>Qtd</TableCell>
+                        <TableCell align="center" sx={{ width: 60 }}>Un</TableCell>
+                        <TableCell align="right" sx={{ width: 100 }}>Valor Unit</TableCell>
+                        <TableCell align="right" sx={{ width: 100 }}>Total</TableCell>
+                        <TableCell align="center" sx={{ width: 50 }}></TableCell>
                       </TableRow>
                     </TableHead>
                     <TableBody>
-                      {parsedData.itens.map((item, idx) => (
+                      {editableItens.map((item, idx) => (
                         <TableRow key={idx}>
-                          <TableCell sx={{ fontWeight: 'medium' }}>{item.descricao}</TableCell>
-                          <TableCell align="right">{item.quantidade} {item.unidade}</TableCell>
-                          <TableCell align="right">R$ {item.valorUnitario.toFixed(2)}</TableCell>
-                          <TableCell align="right">R$ {(item.quantidade * item.valorUnitario).toFixed(2)}</TableCell>
+                          <TableCell>
+                            <TextField
+                              fullWidth
+                              size="small"
+                              variant="standard"
+                              value={item.descricao}
+                              onChange={(e) => handleEditItem(idx, 'descricao', e.target.value)}
+                              placeholder="Nome do produto"
+                              slotProps={{ htmlInput: { style: { fontSize: '0.875rem' } } }}
+                            />
+                          </TableCell>
+                          <TableCell align="right">
+                            <TextField
+                              type="number"
+                              size="small"
+                              variant="standard"
+                              value={item.quantidade}
+                              onChange={(e) => handleEditItem(idx, 'quantidade', e.target.value)}
+                              slotProps={{ htmlInput: { min: 0, step: 'any', style: { textAlign: 'right', fontSize: '0.875rem' } } }}
+                            />
+                          </TableCell>
+                          <TableCell align="center">
+                            <TextField
+                              size="small"
+                              variant="standard"
+                              value={item.unidade}
+                              onChange={(e) => handleEditItem(idx, 'unidade', e.target.value)}
+                              placeholder="UN"
+                              slotProps={{ htmlInput: { style: { textAlign: 'center', fontSize: '0.875rem' } } }}
+                            />
+                          </TableCell>
+                          <TableCell align="right">
+                            <TextField
+                              type="number"
+                              size="small"
+                              variant="standard"
+                              value={item.valorUnitario}
+                              onChange={(e) => handleEditItem(idx, 'valorUnitario', e.target.value)}
+                              slotProps={{ htmlInput: { min: 0, step: 'any', style: { textAlign: 'right', fontSize: '0.875rem' } } }}
+                            />
+                          </TableCell>
+                          <TableCell align="right" sx={{ fontWeight: 'bold', fontSize: '0.875rem', pr: 2 }}>
+                            R$ {(item.quantidade * item.valorUnitario).toFixed(2)}
+                          </TableCell>
+                          <TableCell align="center">
+                            <IconButton 
+                              color="error" 
+                              size="small" 
+                              onClick={() => handleRemoveItem(idx)}
+                            >
+                              <Trash2 size={16} />
+                            </IconButton>
+                          </TableCell>
                         </TableRow>
                       ))}
+                      {editableItens.length === 0 && (
+                        <TableRow>
+                          <TableCell colSpan={6} align="center" sx={{ py: 3, color: 'text.secondary' }}>
+                            Nenhum item na lista. Clique em "Adicionar Item".
+                          </TableCell>
+                        </TableRow>
+                      )}
                     </TableBody>
                   </Table>
                 </TableContainer>
@@ -299,3 +416,4 @@ export default function Importar() {
     </Box>
   );
 }
+

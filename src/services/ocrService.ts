@@ -20,10 +20,11 @@ export interface OcrResult {
  * Service to process receipt images using Tesseract.js
  */
 export async function processReceiptImage(imageFile: File): Promise<OcrResult> {
+  const processedFile = await preprocessImage(imageFile);
   const worker = await createWorker('por'); // Portuguese language worker
   
   try {
-    const ret = await worker.recognize(imageFile);
+    const ret = await worker.recognize(processedFile);
     const text = ret.data.text;
     
     // Parse items from OCR text using patterns
@@ -43,6 +44,72 @@ export async function processReceiptImage(imageFile: File): Promise<OcrResult> {
   } finally {
     await worker.terminate();
   }
+}
+
+/**
+ * Preprocesses the image using canvas to improve Tesseract OCR accuracy.
+ * Converts to grayscale and applies high-contrast thresholding.
+ */
+function preprocessImage(imageFile: File): Promise<File> {
+  return new Promise((resolve) => {
+    const img = new Image();
+    const objectUrl = URL.createObjectURL(imageFile);
+    img.src = objectUrl;
+    img.onload = () => {
+      URL.revokeObjectURL(objectUrl);
+      const canvas = document.createElement('canvas');
+      const ctx = canvas.getContext('2d');
+      if (!ctx) {
+        resolve(imageFile);
+        return;
+      }
+      
+      // Scale up image slightly if it is small to improve OCR character recognition
+      const scale = img.width < 1200 ? 1.5 : 1;
+      canvas.width = img.width * scale;
+      canvas.height = img.height * scale;
+      
+      // Draw image with scaling
+      ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+      
+      const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+      const data = imageData.data;
+      
+      // Pre-calculate threshold or use a dynamic threshold
+      // For receipt OCR, a simple global threshold around 125 is very effective
+      for (let i = 0; i < data.length; i += 4) {
+        const r = data[i];
+        const g = data[i + 1];
+        const b = data[i + 2];
+        
+        // Convert to grayscale using luminance
+        const gray = 0.299 * r + 0.587 * g + 0.114 * b;
+        
+        // High contrast binarization
+        const threshold = 125;
+        const binary = gray > threshold ? 255 : 0;
+        
+        data[i] = binary;
+        data[i + 1] = binary;
+        data[i + 2] = binary;
+      }
+      
+      ctx.putImageData(imageData, 0, 0);
+      
+      canvas.toBlob((blob) => {
+        if (blob) {
+          const file = new File([blob], imageFile.name, { type: 'image/jpeg' });
+          resolve(file);
+        } else {
+          resolve(imageFile);
+        }
+      }, 'image/jpeg', 0.9);
+    };
+    img.onerror = () => {
+      URL.revokeObjectURL(objectUrl);
+      resolve(imageFile);
+    };
+  });
 }
 
 /**
@@ -106,7 +173,10 @@ function parseTextReceipt(text: string): { itens: OcrResult['itens']; valorTotal
   const itens: OcrResult['itens'] = [];
   let extractedTotal: number | null = null;
 
-  const validUnits = ['UN', 'KG', 'LT', 'ML', 'G', 'PC', 'FD', 'CX', 'UNID', 'UND', 'U'];
+  const validUnits = [
+    'UN', 'KG', 'LT', 'ML', 'G', 'PC', 'FD', 'CX', 'UNID', 'UND', 'U',
+    'KA', 'K6', 'KS', 'KO', 'UM', 'UNI', 'UN1'
+  ];
 
   const parseLocalFloat = (valStr: string): number => {
     if (!valStr) return 0;
@@ -186,7 +256,17 @@ function parseTextReceipt(text: string): { itens: OcrResult['itens']; valorTotal
     const totalVal = parseLocalFloat(tokens[totalIdx]);
     const priceVal = parseLocalFloat(tokens[priceIdx]);
     let qtyVal = parseLocalFloat(tokens[qtyIdx]);
-    const unit = unitIdx !== -1 ? tokens[unitIdx].toUpperCase() : 'UN';
+    
+    let rawUnit = unitIdx !== -1 ? tokens[unitIdx].toUpperCase() : 'UN';
+    // Normalize OCR misreadings of units
+    let unit = 'UN';
+    if (/^(KG|KA|K6|KS|KO)$/i.test(rawUnit)) {
+      unit = 'KG';
+    } else if (/^(UN|UM|UNI|UN1|UND|UNID|U)$/i.test(rawUnit)) {
+      unit = 'UN';
+    } else {
+      unit = rawUnit;
+    }
 
     // Skip if price parsing failed or values are zero
     if (priceVal <= 0 || totalVal <= 0) continue;

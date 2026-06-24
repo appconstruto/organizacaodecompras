@@ -307,6 +307,12 @@ export default function Importar() {
 
                 <Divider sx={{ my: 2 }} />
 
+                {editableItens.length === 0 && (
+                  <Alert severity="info" sx={{ mb: 2, borderRadius: 2, fontSize: '0.85rem' }}>
+                    Chave fiscal lida com sucesso! Como a SEFAZ bloqueia consultas automatizadas no navegador, por favor adicione os itens da sua compra manualmente utilizando o botão "+ Adicionar Item".
+                  </Alert>
+                )}
+
                 <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 1 }}>
                   <Typography variant="subtitle2" sx={{ fontWeight: 'bold' }}>Itens Encontrados</Typography>
                   <Button 

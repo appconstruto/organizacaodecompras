@@ -1,7 +1,7 @@
 import { create } from 'zustand';
 import { supabase } from '../services/supabaseClient';
 import { normalizeProductWithAI } from '../services/geminiNormalizer';
-import type { NormalizedProduct } from './productNormalizer';
+import type { NormalizedProduct } from '../services/productNormalizer';
 import type { ParsedNFCe } from '../services/nfcParser';
 
 interface Product {

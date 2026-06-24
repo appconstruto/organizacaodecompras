@@ -50,6 +50,10 @@ interface AppState {
   fetchData: () => Promise<void>;
   importNfc: (parsed: ParsedNFCe, method: string) => Promise<boolean>;
   generateInsights: () => Promise<void>;
+  deletePurchase: (purchaseId: string) => Promise<boolean>;
+  deletePurchaseItem: (itemId: string, purchaseId: string) => Promise<boolean>;
+  updatePurchase: (purchaseId: string, mercado: string, data: string) => Promise<boolean>;
+  updatePurchaseItem: (itemId: string, purchaseId: string, quantidade: number, valorUnitario: number, unidade: string) => Promise<boolean>;
 }
 
 export const useAppStore = create<AppState>((set, get) => ({
@@ -267,6 +271,184 @@ export const useAppStore = create<AppState>((set, get) => ({
       set({ insights: updatedInsights || [] });
     } catch (err) {
       console.error('Error generating automatic insights:', err);
+    }
+  },
+
+  deletePurchase: async (purchaseId: string) => {
+    set({ loading: true, error: null });
+    try {
+      const purchase = get().purchases.find(p => p.id === purchaseId);
+      
+      // 1. Delete purchase items first
+      const { error: itemsErr } = await supabase
+        .from('itens_compra')
+        .delete()
+        .eq('compra_id', purchaseId);
+
+      if (itemsErr) throw itemsErr;
+
+      // 2. Delete purchase itself
+      const { error: purchaseErr } = await supabase
+        .from('compras')
+        .delete()
+        .eq('id', purchaseId);
+
+      if (purchaseErr) throw purchaseErr;
+
+      // 3. Delete linked invoice if exists
+      if (purchase?.nota_fiscal_id) {
+        const { error: nfErr } = await supabase
+          .from('notas_fiscais')
+          .delete()
+          .eq('id', purchase.nota_fiscal_id);
+        if (nfErr) throw nfErr;
+      }
+
+      await get().fetchData();
+      await get().generateInsights();
+      return true;
+    } catch (err: any) {
+      console.error('Error deleting purchase:', err);
+      set({ error: err.message, loading: false });
+      return false;
+    }
+  },
+
+  deletePurchaseItem: async (itemId: string, purchaseId: string) => {
+    set({ loading: true, error: null });
+    try {
+      const purchase = get().purchases.find(p => p.id === purchaseId);
+
+      // 1. Delete item
+      const { error: itemErr } = await supabase
+        .from('itens_compra')
+        .delete()
+        .eq('id', itemId);
+
+      if (itemErr) throw itemErr;
+
+      // 2. Query remaining items to compute new total
+      const { data: remainingItems, error: itemsQueryErr } = await supabase
+        .from('itens_compra')
+        .select('quantidade, valor_unitario')
+        .eq('compra_id', purchaseId);
+
+      if (itemsQueryErr) throw itemsQueryErr;
+
+      const newTotal = (remainingItems || []).reduce(
+        (sum, item) => sum + (Number(item.quantidade) * Number(item.valor_unitario)), 
+        0
+      );
+
+      // 3. Update purchase total
+      const { error: purchaseUpdateErr } = await supabase
+        .from('compras')
+        .update({ valor_total: newTotal })
+        .eq('id', purchaseId);
+
+      if (purchaseUpdateErr) throw purchaseUpdateErr;
+
+      // 4. Update linked invoice total
+      if (purchase?.nota_fiscal_id) {
+        const { error: nfErr } = await supabase
+          .from('notas_fiscais')
+          .update({ valor_total: newTotal })
+          .eq('id', purchase.nota_fiscal_id);
+        if (nfErr) throw nfErr;
+      }
+
+      await get().fetchData();
+      await get().generateInsights();
+      return true;
+    } catch (err: any) {
+      console.error('Error deleting purchase item:', err);
+      set({ error: err.message, loading: false });
+      return false;
+    }
+  },
+
+  updatePurchase: async (purchaseId: string, mercado: string, data: string) => {
+    set({ loading: true, error: null });
+    try {
+      const purchase = get().purchases.find(p => p.id === purchaseId);
+
+      // 1. Update purchase
+      const { error: purchaseErr } = await supabase
+        .from('compras')
+        .update({ mercado, data })
+        .eq('id', purchaseId);
+
+      if (purchaseErr) throw purchaseErr;
+
+      // 2. Update linked invoice date
+      if (purchase?.nota_fiscal_id) {
+        const { error: nfErr } = await supabase
+          .from('notas_fiscais')
+          .update({ data_emissao: data })
+          .eq('id', purchase.nota_fiscal_id);
+        if (nfErr) throw nfErr;
+      }
+
+      await get().fetchData();
+      await get().generateInsights();
+      return true;
+    } catch (err: any) {
+      console.error('Error updating purchase:', err);
+      set({ error: err.message, loading: false });
+      return false;
+    }
+  },
+
+  updatePurchaseItem: async (itemId: string, purchaseId: string, quantidade: number, valorUnitario: number, unidade: string) => {
+    set({ loading: true, error: null });
+    try {
+      const purchase = get().purchases.find(p => p.id === purchaseId);
+
+      // 1. Update item values
+      const { error: itemErr } = await supabase
+        .from('itens_compra')
+        .update({ quantidade, valor_unitario: valorUnitario, unidade })
+        .eq('id', itemId);
+
+      if (itemErr) throw itemErr;
+
+      // 2. Query all items to compute new total
+      const { data: remainingItems, error: itemsQueryErr } = await supabase
+        .from('itens_compra')
+        .select('quantidade, valor_unitario')
+        .eq('compra_id', purchaseId);
+
+      if (itemsQueryErr) throw itemsQueryErr;
+
+      const newTotal = (remainingItems || []).reduce(
+        (sum, item) => sum + (Number(item.quantidade) * Number(item.valor_unitario)), 
+        0
+      );
+
+      // 3. Update purchase total
+      const { error: purchaseUpdateErr } = await supabase
+        .from('compras')
+        .update({ valor_total: newTotal })
+        .eq('id', purchaseId);
+
+      if (purchaseUpdateErr) throw purchaseUpdateErr;
+
+      // 4. Update linked invoice total
+      if (purchase?.nota_fiscal_id) {
+        const { error: nfErr } = await supabase
+          .from('notas_fiscais')
+          .update({ valor_total: newTotal })
+          .eq('id', purchase.nota_fiscal_id);
+        if (nfErr) throw nfErr;
+      }
+
+      await get().fetchData();
+      await get().generateInsights();
+      return true;
+    } catch (err: any) {
+      console.error('Error updating purchase item:', err);
+      set({ error: err.message, loading: false });
+      return false;
     }
   }
 }));

@@ -24,7 +24,7 @@ export const CATEGORIES_MAP: Record<string, number> = {
  * Heuristics-based product normalizer.
  * In V2/V3, this can call OpenAI or Gemini APIs to automatically normalize.
  */
-export function normalizeProduct(descricaoOriginal: string): NormalizedProduct {
+export function normalizeProduct(descricaoOriginal: string, unidadeOriginal?: string): NormalizedProduct {
   const cleanDesc = descricaoOriginal.toUpperCase().trim();
 
   // 1. Café Pilão rules
@@ -117,24 +117,85 @@ export function normalizeProduct(descricaoOriginal: string): NormalizedProduct {
   let categoriaId = CATEGORIES_MAP['Outros'];
   let mult = 1.0;
 
-  if (cleanDesc.includes('KG') || cleanDesc.includes('KILO')) {
-    unit = 'kg';
-  } else if (cleanDesc.includes('ML') || cleanDesc.includes(' L ') || cleanDesc.endsWith(' L') || cleanDesc.includes('LITRO')) {
-    unit = 'L';
-    if (cleanDesc.includes('500ML')) mult = 0.5;
-    else if (cleanDesc.includes('350ML')) mult = 0.35;
-    else if (cleanDesc.includes('900ML')) mult = 0.9;
+  // Process original unit if available
+  if (unidadeOriginal) {
+    const cleanUnit = unidadeOriginal.toUpperCase().trim();
+    if (cleanUnit === 'KG' || cleanUnit === 'K' || cleanUnit === 'KILO' || cleanUnit === 'KILOS' || cleanUnit === 'KG.') {
+      unit = 'kg';
+    } else if (cleanUnit === 'L' || cleanUnit === 'LITRO' || cleanUnit === 'LITROS' || cleanUnit === 'ML') {
+      unit = 'L';
+    } else if (cleanUnit === 'UN' || cleanUnit === 'UNID' || cleanUnit === 'UNIDADE' || cleanUnit === 'UNIDADES' || cleanUnit === 'U') {
+      unit = 'unidades';
+    }
   }
 
-  // Guess category
+  // If unit is still 'unidades', inspect description text
+  if (unit === 'unidades') {
+    if (cleanDesc.includes('KG') || cleanDesc.includes('KILO') || cleanDesc.includes(' KG')) {
+      unit = 'kg';
+    } else if (cleanDesc.includes('ML') || cleanDesc.includes(' L ') || cleanDesc.endsWith(' L') || cleanDesc.includes('LITRO')) {
+      unit = 'L';
+      if (cleanDesc.includes('500ML')) mult = 0.5;
+      else if (cleanDesc.includes('350ML')) mult = 0.35;
+      else if (cleanDesc.includes('900ML')) mult = 0.9;
+    }
+  }
+
+  // Guess category & refine unit defaults
   if (cleanDesc.includes('SABONETE') || cleanDesc.includes('SHAMPOO') || cleanDesc.includes('CREME DENTAL') || cleanDesc.includes('ESCOVA') || cleanDesc.includes('PAPEL HIGIENICO')) {
     categoriaId = CATEGORIES_MAP['Higiene'];
   } else if (cleanDesc.includes('DETERGENTE') || cleanDesc.includes('DESINFETANTE') || cleanDesc.includes('OMO') || cleanDesc.includes('SABÃO') || cleanDesc.includes('AMACIANTE')) {
     categoriaId = CATEGORIES_MAP['Limpeza'];
-  } else if (cleanDesc.includes('CARNE') || cleanDesc.includes('PEITO') || cleanDesc.includes('FRANGO') || cleanDesc.includes('LINGUICA') || cleanDesc.includes('ALCATRA')) {
+  } else if (
+    cleanDesc.includes('CARNE') || 
+    cleanDesc.includes('PEITO') || 
+    cleanDesc.includes('FRANGO') || 
+    cleanDesc.includes('LINGUICA') || 
+    cleanDesc.includes('LINGUIÇA') ||
+    cleanDesc.includes('ALCATRA') ||
+    cleanDesc.includes('BOVINO') ||
+    cleanDesc.includes('SUINO') ||
+    cleanDesc.includes('SUÍNO') ||
+    cleanDesc.includes('SÚINO') ||
+    cleanDesc.includes('MAMINHA') ||
+    cleanDesc.includes('PICANHA') ||
+    cleanDesc.includes('COSTELA') ||
+    cleanDesc.includes('FILÉ') ||
+    cleanDesc.includes('FILE') ||
+    cleanDesc.includes('PATINHO') ||
+    cleanDesc.includes('ACEM') ||
+    cleanDesc.includes('ACÉM')
+  ) {
     categoriaId = CATEGORIES_MAP['Açougue'];
-  } else if (cleanDesc.includes('KG') && (cleanDesc.includes('TOMATE') || cleanDesc.includes('CEBOLA') || cleanDesc.includes('BATATA') || cleanDesc.includes('MACA') || cleanDesc.includes('BANANA'))) {
+    // Default to kg for meat unless another volume/unit was explicitly parsed
+    if (!unidadeOriginal || unidadeOriginal.toUpperCase().trim() === 'UN') {
+      unit = 'kg';
+    }
+  } else if (
+    cleanDesc.includes('TOMATE') || 
+    cleanDesc.includes('CEBOLA') || 
+    cleanDesc.includes('BATATA') || 
+    cleanDesc.includes('MACA') || 
+    cleanDesc.includes('MAÇÃ') ||
+    cleanDesc.includes('BANANA') ||
+    cleanDesc.includes('MANDIOQUINHA') ||
+    cleanDesc.includes('CENOURA') ||
+    cleanDesc.includes('LARANJA') ||
+    cleanDesc.includes('ALHO') ||
+    cleanDesc.includes('LIMÃO') ||
+    cleanDesc.includes('LIMAO') ||
+    cleanDesc.includes('ABOBORA') ||
+    cleanDesc.includes('ABÓBORA') ||
+    cleanDesc.includes('BROCOLIS') ||
+    cleanDesc.includes('BRÓCOLIS') ||
+    cleanDesc.includes('ALFACE') ||
+    cleanDesc.includes('REPOLHO')
+  ) {
     categoriaId = CATEGORIES_MAP['Hortifruti'];
+    // Default to kg for Hortifruti items unless another volume/unit was explicitly parsed
+    if (!unidadeOriginal || unidadeOriginal.toUpperCase().trim() === 'UN') {
+      unit = 'kg';
+    }
   }
 
   // Clean brand search

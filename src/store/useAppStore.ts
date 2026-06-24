@@ -1,7 +1,7 @@
 import { create } from 'zustand';
 import { supabase } from '../services/supabaseClient';
-import { normalizeProduct } from '../services/productNormalizer';
-import type { NormalizedProduct } from '../services/productNormalizer';
+import { normalizeProductWithAI } from '../services/geminiNormalizer';
+import type { NormalizedProduct } from './productNormalizer';
 import type { ParsedNFCe } from '../services/nfcParser';
 
 interface Product {
@@ -170,14 +170,14 @@ export const useAppStore = create<AppState>((set, get) => ({
 
       // 4. Save items (resolving products and historical prices)
       for (const item of parsed.itens) {
-        // Normalize description
-        const normalized: NormalizedProduct = normalizeProduct(item.descricao);
+        // Normalize description and unit using Gemini AI if key is present
+        const normalized: NormalizedProduct = await normalizeProductWithAI(item.descricao, item.unidade);
 
         // Find or create product in DB
         let productId = '';
         const { data: existingProduct, error: prodFindErr } = await supabase
           .from('produtos')
-          .select('id')
+          .select('id, unidade_base, categoria_id')
           .eq('nome_padronizado', normalized.nomePadronizado)
           .maybeSingle();
 
@@ -185,6 +185,21 @@ export const useAppStore = create<AppState>((set, get) => ({
 
         if (existingProduct) {
           productId = existingProduct.id;
+          
+          // Auto-upgrade base unit and category if the existing one is generic ('unidades' or 'Outros')
+          // but we now have a specific one (e.g. 'kg' or 'L')
+          const needsUnitUpgrade = existingProduct.unidade_base === 'unidades' && normalized.unidadeBase !== 'unidades';
+          const needsCategoryUpgrade = existingProduct.categoria_id === 10 && normalized.categoriaId !== 10;
+          
+          if (needsUnitUpgrade || needsCategoryUpgrade) {
+            await supabase
+              .from('produtos')
+              .update({
+                unidade_base: needsUnitUpgrade ? normalized.unidadeBase : existingProduct.unidade_base,
+                categoria_id: needsCategoryUpgrade ? normalized.categoriaId : existingProduct.categoria_id
+              })
+              .eq('id', productId);
+          }
         } else {
           const { data: newProduct, error: prodCreateErr } = await supabase
             .from('produtos')
@@ -201,6 +216,22 @@ export const useAppStore = create<AppState>((set, get) => ({
           productId = newProduct.id;
         }
 
+        // Convert sub-units to base units (g -> kg, ml -> L)
+        let finalQuantidade = item.quantidade;
+        let finalUnidade = item.unidade;
+        let finalValorUnitario = item.valorUnitario;
+
+        const cleanUnit = item.unidade.toUpperCase().trim();
+        if (cleanUnit === 'G' || cleanUnit === 'GR' || cleanUnit === 'GRAMAS') {
+          finalQuantidade = item.quantidade / 1000;
+          finalUnidade = 'KG';
+          finalValorUnitario = item.valorUnitario * 1000;
+        } else if (cleanUnit === 'ML' || cleanUnit === 'ML.') {
+          finalQuantidade = item.quantidade / 1000;
+          finalUnidade = 'L';
+          finalValorUnitario = item.valorUnitario * 1000;
+        }
+
         // Insert item details
         const { error: itemInsertErr } = await supabase
           .from('itens_compra')
@@ -208,9 +239,9 @@ export const useAppStore = create<AppState>((set, get) => ({
             compra_id: newPurchase.id,
             descricao_original: item.descricao,
             produto_id: productId,
-            quantidade: item.quantidade,
-            unidade: item.unidade,
-            valor_unitario: item.valorUnitario
+            quantidade: finalQuantidade,
+            unidade: finalUnidade,
+            valor_unitario: finalValorUnitario
           });
 
         if (itemInsertErr) throw itemInsertErr;

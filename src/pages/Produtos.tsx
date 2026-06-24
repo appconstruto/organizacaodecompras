@@ -1,11 +1,16 @@
 import { useState } from 'react';
-import { Box, Typography, Card, CardContent, Table, TableBody, TableCell, TableContainer, TableHead, TableRow, Paper, TextField, InputAdornment, Chip } from '@mui/material';
+import { Box, Typography, Card, CardContent, Table, TableBody, TableCell, TableContainer, TableHead, TableRow, Paper, TextField, InputAdornment, Chip, Dialog, DialogTitle, DialogContent, DialogContentText, DialogActions, Button, IconButton } from '@mui/material';
 import { useAppStore } from '../store/useAppStore';
-import { Search, Tag } from 'lucide-react';
+import { Search, Tag, Trash2 } from 'lucide-react';
 
 export default function Produtos() {
-  const { products, purchases } = useAppStore();
+  const { products, purchases, deleteProduct, loading } = useAppStore();
   const [search, setSearch] = useState('');
+
+  // Dialog State
+  const [deleteOpen, setDeleteOpen] = useState(false);
+  const [productIdToDelete, setProductIdToDelete] = useState<string | null>(null);
+  const [productNameToDelete, setProductNameToDelete] = useState('');
 
   // Local helper to calculate stats per product
   const getProductStats = (productId: string) => {
@@ -28,6 +33,21 @@ export default function Produtos() {
     const avg = prices.reduce((a, b) => a + b, 0) / prices.length;
 
     return { min, max, avg, total: totalQty };
+  };
+
+  const handleOpenDelete = (id: string, name: string) => {
+    setProductIdToDelete(id);
+    setProductNameToDelete(name);
+    setDeleteOpen(true);
+  };
+
+  const handleConfirmDelete = async () => {
+    if (productIdToDelete) {
+      await deleteProduct(productIdToDelete);
+      setDeleteOpen(false);
+      setProductIdToDelete(null);
+      setProductNameToDelete('');
+    }
   };
 
   const filteredProducts = products.filter(p => 
@@ -73,6 +93,7 @@ export default function Produtos() {
                   <TableCell align="right">Preço Mínimo</TableCell>
                   <TableCell align="right">Preço Médio</TableCell>
                   <TableCell align="right">Preço Máximo</TableCell>
+                  <TableCell align="center" sx={{ width: 80 }}>Ações</TableCell>
                 </TableRow>
               </TableHead>
               <TableBody>
@@ -107,12 +128,22 @@ export default function Produtos() {
                         <TableCell align="right" sx={{ color: 'error.main', fontWeight: 'medium' }}>
                           R$ {stats.max.toFixed(2)}
                         </TableCell>
+                        <TableCell align="center">
+                          <IconButton 
+                            color="error" 
+                            size="small" 
+                            onClick={() => handleOpenDelete(product.id, product.nome_padronizado)}
+                            disabled={loading}
+                          >
+                            <Trash2 size={16} />
+                          </IconButton>
+                        </TableCell>
                       </TableRow>
                     );
                   })
                 ) : (
                   <TableRow>
-                    <TableCell colSpan={7} align="center" sx={{ py: 6 }}>
+                    <TableCell colSpan={8} align="center" sx={{ py: 6 }}>
                       <Tag size={36} style={{ opacity: 0.2, marginBottom: 8 }} />
                       <Typography variant="body2" color="text.secondary">
                         Nenhum produto cadastrado na biblioteca ainda.
@@ -125,6 +156,23 @@ export default function Produtos() {
           </TableContainer>
         </CardContent>
       </Card>
+
+      {/* Confirmation Dialog */}
+      <Dialog open={deleteOpen} onClose={() => setDeleteOpen(false)}>
+        <DialogTitle sx={{ fontWeight: 'bold' }}>Excluir Produto?</DialogTitle>
+        <DialogContent>
+          <DialogContentText>
+            Deseja realmente excluir o produto <strong>{productNameToDelete}</strong>? 
+            <br />
+            <br />
+            <strong>Atenção:</strong> Se este produto estiver associado a compras anteriores, a exclusão removerá os itens das compras e os valores totais das compras correspondentes serão recalculados automaticamente.
+          </DialogContentText>
+        </DialogContent>
+        <DialogActions sx={{ p: 2 }}>
+          <Button onClick={() => setDeleteOpen(false)} variant="outlined">Cancelar</Button>
+          <Button onClick={handleConfirmDelete} color="error" variant="contained" disabled={loading}>Excluir</Button>
+        </DialogActions>
+      </Dialog>
     </Box>
   );
 }

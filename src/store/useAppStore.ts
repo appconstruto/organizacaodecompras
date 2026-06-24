@@ -54,6 +54,7 @@ interface AppState {
   deletePurchaseItem: (itemId: string, purchaseId: string) => Promise<boolean>;
   updatePurchase: (purchaseId: string, mercado: string, data: string) => Promise<boolean>;
   updatePurchaseItem: (itemId: string, purchaseId: string, quantidade: number, valorUnitario: number, unidade: string) => Promise<boolean>;
+  deleteProduct: (productId: string) => Promise<boolean>;
 }
 
 export const useAppStore = create<AppState>((set, get) => ({
@@ -478,6 +479,89 @@ export const useAppStore = create<AppState>((set, get) => ({
       return true;
     } catch (err: any) {
       console.error('Error updating purchase item:', err);
+      set({ error: err.message, loading: false });
+      return false;
+    }
+  },
+
+  deleteProduct: async (productId: string) => {
+    set({ loading: true, error: null });
+    try {
+      // 1. Find all purchase items associated with this product to know which purchases will be affected
+      const { data: itemsToChange, error: findItemsErr } = await supabase
+        .from('itens_compra')
+        .select('compra_id')
+        .eq('produto_id', productId);
+
+      if (findItemsErr) throw findItemsErr;
+
+      // 2. Delete price history
+      const { error: histErr } = await supabase
+        .from('historico_precos')
+        .delete()
+        .eq('produto_id', productId);
+
+      if (histErr) throw histErr;
+
+      // 3. Delete purchase items
+      const { error: itemsErr } = await supabase
+        .from('itens_compra')
+        .delete()
+        .eq('produto_id', productId);
+
+      if (itemsErr) throw itemsErr;
+
+      // 4. Delete the product itself
+      const { error: prodErr } = await supabase
+        .from('produtos')
+        .delete()
+        .eq('id', productId);
+
+      if (prodErr) throw prodErr;
+
+      // 5. Recalculate and update the totals for all affected purchases
+      if (itemsToChange && itemsToChange.length > 0) {
+        const uniquePurchaseIds = Array.from(new Set(itemsToChange.map(item => item.compra_id)));
+
+        for (const purchaseId of uniquePurchaseIds) {
+          // Query remaining items
+          const { data: remainingItems, error: itemsQueryErr } = await supabase
+            .from('itens_compra')
+            .select('quantidade, valor_unitario')
+            .eq('compra_id', purchaseId);
+
+          if (itemsQueryErr) throw itemsQueryErr;
+
+          const newTotal = (remainingItems || []).reduce(
+            (sum, item) => sum + (Number(item.quantidade) * Number(item.valor_unitario)), 
+            0
+          );
+
+          // Update purchase
+          const { error: purchaseUpdateErr } = await supabase
+            .from('compras')
+            .update({ valor_total: newTotal })
+            .eq('id', purchaseId);
+
+          if (purchaseUpdateErr) throw purchaseUpdateErr;
+
+          // Find if there's a linked invoice to update
+          const purchase = get().purchases.find(p => p.id === purchaseId);
+          if (purchase?.nota_fiscal_id) {
+            const { error: nfErr } = await supabase
+              .from('notas_fiscais')
+              .update({ valor_total: newTotal })
+              .eq('id', purchase.nota_fiscal_id);
+            if (nfErr) throw nfErr;
+          }
+        }
+      }
+
+      await get().fetchData();
+      await get().generateInsights();
+      return true;
+    } catch (err: any) {
+      console.error('Error deleting product:', err);
       set({ error: err.message, loading: false });
       return false;
     }

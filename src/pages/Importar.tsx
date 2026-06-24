@@ -345,41 +345,45 @@ export default function Importar() {
                             <TextField
                               fullWidth
                               size="small"
-                              variant="standard"
+                              variant="outlined"
                               value={item.descricao}
                               onChange={(e) => handleEditItem(idx, 'descricao', e.target.value)}
                               placeholder="Nome do produto"
-                              slotProps={{ htmlInput: { style: { fontSize: '0.875rem' } } }}
+                              slotProps={{ htmlInput: { style: { padding: '6px 8px', fontSize: '0.85rem' } } }}
+                              sx={{ bgcolor: 'background.paper', borderRadius: 1 }}
                             />
                           </TableCell>
                           <TableCell align="right">
                             <TextField
                               type="number"
                               size="small"
-                              variant="standard"
+                              variant="outlined"
                               value={item.quantidade}
                               onChange={(e) => handleEditItem(idx, 'quantidade', e.target.value)}
-                              slotProps={{ htmlInput: { min: 0, step: 'any', style: { textAlign: 'right', fontSize: '0.875rem' } } }}
+                              slotProps={{ htmlInput: { min: 0, step: 'any', style: { textAlign: 'right', padding: '6px 6px', fontSize: '0.85rem' } } }}
+                              sx={{ bgcolor: 'background.paper', borderRadius: 1, width: 70 }}
                             />
                           </TableCell>
                           <TableCell align="center">
                             <TextField
                               size="small"
-                              variant="standard"
+                              variant="outlined"
                               value={item.unidade}
                               onChange={(e) => handleEditItem(idx, 'unidade', e.target.value)}
                               placeholder="UN"
-                              slotProps={{ htmlInput: { style: { textAlign: 'center', fontSize: '0.875rem' } } }}
+                              slotProps={{ htmlInput: { style: { textAlign: 'center', padding: '6px 6px', fontSize: '0.85rem' } } }}
+                              sx={{ bgcolor: 'background.paper', borderRadius: 1, width: 55 }}
                             />
                           </TableCell>
                           <TableCell align="right">
                             <TextField
                               type="number"
                               size="small"
-                              variant="standard"
+                              variant="outlined"
                               value={item.valorUnitario}
                               onChange={(e) => handleEditItem(idx, 'valorUnitario', e.target.value)}
-                              slotProps={{ htmlInput: { min: 0, step: 'any', style: { textAlign: 'right', fontSize: '0.875rem' } } }}
+                              slotProps={{ htmlInput: { min: 0, step: 'any', style: { textAlign: 'right', padding: '6px 6px', fontSize: '0.85rem' } } }}
+                              sx={{ bgcolor: 'background.paper', borderRadius: 1, width: 85 }}
                             />
                           </TableCell>
                           <TableCell align="right" sx={{ fontWeight: 'bold', fontSize: '0.875rem', pr: 2 }}>

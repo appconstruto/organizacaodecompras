@@ -10,6 +10,7 @@ export interface ParsedNFCe {
     quantidade: number;
     unidade: string;
     valorUnitario: number;
+    confidence?: number;
   }>;
 }
 

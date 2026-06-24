@@ -4,9 +4,22 @@ import { QrReader } from './QrReader'; // We will create a clean component for c
 import { Html5Qrcode } from 'html5-qrcode';
 import { parseNfcUrl } from '../services/nfcParser';
 import type { ParsedNFCe } from '../services/nfcParser';
-import { processReceiptImage } from '../services/ocrService';
 import { useAppStore } from '../store/useAppStore';
+import { supabase } from '../services/supabaseClient';
 import { Camera, FileText, ImageIcon, CheckCircle, ShieldAlert, Trash2, Plus } from 'lucide-react';
+
+const fileToBase64 = (file: File): Promise<string> => {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.readAsDataURL(file);
+    reader.onload = () => {
+      const base64String = reader.result as string;
+      const pureBase64 = base64String.split(',')[1];
+      resolve(pureBase64);
+    };
+    reader.onerror = (error) => reject(error);
+  });
+};
 
 export default function Importar() {
   const { importNfc, loading: storeLoading, error: storeError } = useAppStore();
@@ -84,15 +97,28 @@ export default function Importar() {
         console.log("No QR Code detected in image file, falling back to pure OCR", e);
       }
 
-      // 2. Process image via OCR to read the text and items
-      const ocrRes = await processReceiptImage(file);
+      // 2. Process image via Supabase Edge Function calling Gemini
+      const base64Data = await fileToBase64(file);
+      const { data: geminiRes, error: edgeFuncError } = await supabase.functions.invoke('process-receipt', {
+        body: { imageBase64: base64Data, mimeType: file.type }
+      });
+
+      if (edgeFuncError) throw edgeFuncError;
 
       // 3. Construct final parsed data, prioritizing QR Code metadata over OCR text
-      const finalChave = qrParsed?.chaveAcesso || ocrRes.chaveAcesso || '';
-      const finalCnpj = qrParsed?.cnpjEmitente || ocrRes.cnpjEmitente || '';
-      const finalDate = qrParsed?.dataEmissao || ocrRes.dataEmissao || new Date();
-      const finalNumero = qrParsed?.numeroNf || ocrRes.numeroNf || '';
-      const finalSerie = qrParsed?.serie || ocrRes.serie || '';
+      const finalChave = qrParsed?.chaveAcesso || geminiRes.chaveAcesso || geminiRes.cnpj || '';
+      const finalCnpj = qrParsed?.cnpjEmitente || geminiRes.cnpj || '';
+      const finalDate = qrParsed?.dataEmissao || (geminiRes.dataEmissao ? new Date(geminiRes.dataEmissao) : new Date());
+      const finalNumero = qrParsed?.numeroNf || geminiRes.numeroNota || '';
+      const finalSerie = qrParsed?.serie || geminiRes.serie || '';
+
+      const itemsFromGemini = (geminiRes.itens || []).map((it: any) => ({
+        descricao: it.descricaoNormalizada || it.descricao || '',
+        quantidade: parseFloat(it.quantidade) || 1,
+        unidade: it.unidade || 'UN',
+        valorUnitario: parseFloat(it.valorUnitario) || 0,
+        confidence: it.confidence
+      }));
 
       const finalParsed: ParsedNFCe = {
         chaveAcesso: finalChave,
@@ -100,18 +126,19 @@ export default function Importar() {
         serie: finalSerie,
         cnpjEmitente: finalCnpj,
         dataEmissao: finalDate,
-        valorTotal: ocrRes.valorTotal > 0 ? ocrRes.valorTotal : (qrParsed?.valorTotal || 0),
-        itens: ocrRes.itens
+        valorTotal: parseFloat(geminiRes.valorTotal) || 0,
+        itens: itemsFromGemini
       };
 
-      if (ocrRes.itens.length === 0) {
-        setErrorMessage('Aviso: Não conseguimos ler os produtos da imagem automaticamente. Você pode preencher as informações adicionando itens abaixo.');
+      if (itemsFromGemini.length === 0) {
+        setErrorMessage('Aviso: Não conseguimos extrair nenhum produto da imagem do cupom.');
       }
 
       setParsedData(finalParsed);
       setLocalLoading(false);
     } catch (err: any) {
-      setErrorMessage(`Erro ao ler arquivo: ${err.message || err}`);
+      console.error(err);
+      setErrorMessage(`Erro ao ler arquivo com Gemini: ${err.message || err}`);
       setLocalLoading(false);
     }
   };
@@ -313,6 +340,12 @@ export default function Importar() {
                   </Alert>
                 )}
 
+                {parsedData && parsedData.valorTotal > 0 && Math.abs(totalCalculado - parsedData.valorTotal) > 0.10 && (
+                  <Alert severity="warning" sx={{ mb: 2, borderRadius: 2, fontSize: '0.85rem' }}>
+                    A soma dos itens (R$ {totalCalculado.toFixed(2)}) diverge do valor total do cupom (R$ {parsedData.valorTotal.toFixed(2)}) por mais de R$ 0,10. Por favor, revise os valores.
+                  </Alert>
+                )}
+
                 <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 1 }}>
                   <Typography variant="subtitle2" sx={{ fontWeight: 'bold' }}>Itens Encontrados</Typography>
                   <Button 
@@ -339,57 +372,66 @@ export default function Importar() {
                       </TableRow>
                     </TableHead>
                     <TableBody>
-                      {editableItens.map((item, idx) => (
-                        <TableRow key={idx}>
-                          <TableCell>
-                            <TextField
-                              fullWidth
-                              size="small"
-                              variant="outlined"
-                              value={item.descricao}
-                              onChange={(e) => handleEditItem(idx, 'descricao', e.target.value)}
-                              placeholder="Nome do produto"
-                              slotProps={{ htmlInput: { style: { padding: '6px 8px', fontSize: '0.85rem' } } }}
-                              sx={{ bgcolor: 'background.paper', borderRadius: 1 }}
-                            />
-                          </TableCell>
-                          <TableCell align="right">
-                            <TextField
-                              type="number"
-                              size="small"
-                              variant="outlined"
-                              value={item.quantidade}
-                              onChange={(e) => handleEditItem(idx, 'quantidade', e.target.value)}
-                              slotProps={{ htmlInput: { min: 0, step: 'any', style: { textAlign: 'right', padding: '6px 6px', fontSize: '0.85rem' } } }}
-                              sx={{ bgcolor: 'background.paper', borderRadius: 1, width: 70 }}
-                            />
-                          </TableCell>
-                          <TableCell align="center">
-                            <TextField
-                              size="small"
-                              variant="outlined"
-                              value={item.unidade}
-                              onChange={(e) => handleEditItem(idx, 'unidade', e.target.value)}
-                              placeholder="UN"
-                              slotProps={{ htmlInput: { style: { textAlign: 'center', padding: '6px 6px', fontSize: '0.85rem' } } }}
-                              sx={{ bgcolor: 'background.paper', borderRadius: 1, width: 55 }}
-                            />
-                          </TableCell>
-                          <TableCell align="right">
-                            <TextField
-                              type="number"
-                              size="small"
-                              variant="outlined"
-                              value={item.valorUnitario}
-                              onChange={(e) => handleEditItem(idx, 'valorUnitario', e.target.value)}
-                              slotProps={{ htmlInput: { min: 0, step: 'any', style: { textAlign: 'right', padding: '6px 6px', fontSize: '0.85rem' } } }}
-                              sx={{ bgcolor: 'background.paper', borderRadius: 1, width: 85 }}
-                            />
-                          </TableCell>
-                          <TableCell align="right" sx={{ fontWeight: 'bold', fontSize: '0.875rem', pr: 2 }}>
-                            R$ {(item.quantidade * item.valorUnitario).toFixed(2)}
-                          </TableCell>
-                          <TableCell align="center">
+                      {editableItens.map((item, idx) => {
+                        const isLowConfidence = item.confidence !== undefined && item.confidence < 80;
+                        const inputBg = isLowConfidence ? '#FFFDE7' : 'background.paper';
+                        
+                        return (
+                          <TableRow key={idx}>
+                            <TableCell>
+                              <TextField
+                                fullWidth
+                                size="small"
+                                variant="outlined"
+                                value={item.descricao}
+                                onChange={(e) => handleEditItem(idx, 'descricao', e.target.value)}
+                                placeholder="Nome do produto"
+                                slotProps={{ htmlInput: { style: { padding: '6px 8px', fontSize: '0.85rem' } } }}
+                                sx={{ bgcolor: inputBg, borderRadius: 1 }}
+                              />
+                              {isLowConfidence && (
+                                <Typography variant="caption" color="warning.main" sx={{ display: 'block', mt: 0.5, fontSize: '0.7rem', fontWeight: 'bold' }}>
+                                  Revisar (Confiança: {item.confidence}%)
+                                </Typography>
+                              )}
+                            </TableCell>
+                            <TableCell align="right">
+                              <TextField
+                                type="number"
+                                size="small"
+                                variant="outlined"
+                                value={item.quantidade}
+                                onChange={(e) => handleEditItem(idx, 'quantidade', e.target.value)}
+                                slotProps={{ htmlInput: { min: 0, step: 'any', style: { textAlign: 'right', padding: '6px 6px', fontSize: '0.85rem' } } }}
+                                sx={{ bgcolor: inputBg, borderRadius: 1, width: 70 }}
+                              />
+                            </TableCell>
+                            <TableCell align="center">
+                              <TextField
+                                size="small"
+                                variant="outlined"
+                                value={item.unidade}
+                                onChange={(e) => handleEditItem(idx, 'unidade', e.target.value)}
+                                placeholder="UN"
+                                slotProps={{ htmlInput: { style: { textAlign: 'center', padding: '6px 6px', fontSize: '0.85rem' } } }}
+                                sx={{ bgcolor: inputBg, borderRadius: 1, width: 55 }}
+                              />
+                            </TableCell>
+                            <TableCell align="right">
+                              <TextField
+                                type="number"
+                                size="small"
+                                variant="outlined"
+                                value={item.valorUnitario}
+                                onChange={(e) => handleEditItem(idx, 'valorUnitario', e.target.value)}
+                                slotProps={{ htmlInput: { min: 0, step: 'any', style: { textAlign: 'right', padding: '6px 6px', fontSize: '0.85rem' } } }}
+                                sx={{ bgcolor: inputBg, borderRadius: 1, width: 85 }}
+                              />
+                            </TableCell>
+                            <TableCell align="right" sx={{ fontWeight: 'bold', fontSize: '0.875rem', pr: 2 }}>
+                              R$ {(item.quantidade * item.valorUnitario).toFixed(2)}
+                            </TableCell>
+                            <TableCell align="center">
                             <IconButton 
                               color="error" 
                               size="small" 
@@ -399,7 +441,7 @@ export default function Importar() {
                             </IconButton>
                           </TableCell>
                         </TableRow>
-                      ))}
+                      )})}
                       {editableItens.length === 0 && (
                         <TableRow>
                           <TableCell colSpan={6} align="center" sx={{ py: 3, color: 'text.secondary' }}>

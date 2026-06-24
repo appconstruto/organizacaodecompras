@@ -106,11 +106,35 @@ export default function Importar() {
       if (edgeFuncError) throw edgeFuncError;
 
       // 3. Construct final parsed data, prioritizing QR Code metadata over OCR text
-      const finalChave = qrParsed?.chaveAcesso || geminiRes.chaveAcesso || geminiRes.cnpj || '';
-      const finalCnpj = qrParsed?.cnpjEmitente || geminiRes.cnpj || '';
-      const finalDate = qrParsed?.dataEmissao || (geminiRes.dataEmissao ? new Date(geminiRes.dataEmissao) : new Date());
-      const finalNumero = qrParsed?.numeroNf || geminiRes.numeroNota || '';
-      const finalSerie = qrParsed?.serie || geminiRes.serie || '';
+      let finalChave = qrParsed?.chaveAcesso || geminiRes.chaveAcesso || '';
+      finalChave = finalChave.replace(/\D/g, '');
+      if (finalChave.length !== 44) {
+        finalChave = '';
+      }
+
+      let finalCnpj = qrParsed?.cnpjEmitente || geminiRes.cnpj || '';
+      finalCnpj = finalCnpj.replace(/\D/g, '');
+      if (finalCnpj.length === 14) {
+        finalCnpj = finalCnpj.replace(/^(\d{2})(\d{3})(\d{3})(\d{4})(\d{2})$/, "$1.$2.$3/$4-$5");
+      } else {
+        finalCnpj = '00.000.000/0000-00';
+      }
+
+      let finalDate = qrParsed?.dataEmissao;
+      if (!finalDate || isNaN(finalDate.getTime())) {
+        const parsedGeminiDate = geminiRes.dataEmissao ? new Date(geminiRes.dataEmissao) : null;
+        if (parsedGeminiDate && !isNaN(parsedGeminiDate.getTime())) {
+          finalDate = parsedGeminiDate;
+        } else {
+          finalDate = new Date();
+        }
+      }
+
+      let finalNumero = String(qrParsed?.numeroNf || geminiRes.numeroNota || '').replace(/\D/g, '');
+      if (!finalNumero) finalNumero = '000000';
+
+      let finalSerie = String(qrParsed?.serie || geminiRes.serie || '').replace(/\D/g, '');
+      if (!finalSerie) finalSerie = '000';
 
       const itemsFromGemini = (geminiRes.itens || []).map((it: any) => ({
         descricao: it.descricaoNormalizada || it.descricao || '',

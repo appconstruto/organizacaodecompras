@@ -29,26 +29,24 @@ serve(async (req) => {
       )
     }
 
-    const prompt = `Analise esta imagem de um cupom fiscal brasileiro e extraia as informações estruturadas de forma extremamente precisa.
-Você deve identificar:
-- CNPJ do estabelecimento (apenas dígitos)
-- Nome do estabelecimento (razao social ou fantasia)
-- Data da compra (no formato ISO AAAA-MM-DD)
-- Número da nota (NFC-e)
-- Série
-- Valor total
-- Lista de produtos
+    const prompt = `Analise esta imagem de um cupom fiscal brasileiro e extraia as informações estruturadas.
+Você deve ler os dados reais presentes na imagem do cupom e preencher o JSON de retorno. 
 
-Para cada produto, extraia a descrição exatamente como aparece no cupom (descricaoOriginal), gere uma versão normalizada (descricaoNormalizada), a marca e a categoria apropriada (ex: Alimentos, Bebidas, Limpeza, Higiene, Açougue, Hortifruti, Padaria, Congelados, Pet, Outros).
-Adicione também um score de confiança (confidence) de 0 a 100 para cada produto indicando a certeza da leitura.
+ATENÇÃO:
+1. NÃO retorne os textos explicativos ou placeholders de exemplo (como "CNPJ apenas numeros" ou "AAAA-MM-DD").
+2. Se você NÃO encontrar um campo (como CNPJ, série ou número da nota), retorne null para aquele campo.
+3. Se você não conseguir ler a data de emissão, retorne a data de hoje no formato YYYY-MM-DD.
+4. Identifique o CNPJ do estabelecimento contendo apenas dígitos numéricos.
+5. Identifique a chave de acesso de 44 dígitos se ela estiver visível na imagem (geralmente perto do QR Code ou no topo/fim do cupom). Se não achar, retorne null.
 
 Retorne APENAS um objeto JSON válido no formato abaixo:
 {
-  "empresa": "Nome do mercado",
-  "cnpj": "CNPJ apenas numeros",
-  "numeroNota": "94882",
-  "serie": "103",
-  "dataEmissao": "AAAA-MM-DD",
+  "empresa": "Nome Real do Estabelecimento (ex: Supermercado Silva)",
+  "cnpj": "12345678000199 (apenas os numeros reais)",
+  "chaveAcesso": "352606564400270001506510... (apenas os 44 numeros se achar, senao null)",
+  "numeroNota": "94882 (numero real da nota)",
+  "serie": "103 (serie real da nota)",
+  "dataEmissao": "2026-06-23 (data real extraida)",
   "valorTotal": 45.89,
   "itens": [
     {

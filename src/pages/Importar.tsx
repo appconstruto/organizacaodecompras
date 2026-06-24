@@ -1,6 +1,7 @@
 import { useRef, useState, useEffect } from 'react';
 import { Box, Typography, Card, CardContent, Button, Tabs, Tab, TextField, Alert, CircularProgress, Divider, Paper, Table, TableBody, TableCell, TableContainer, TableHead, TableRow, Grid, IconButton } from '@mui/material';
 import { QrReader } from './QrReader'; // We will create a clean component for camera QR scanning
+import { Html5Qrcode } from 'html5-qrcode';
 import { parseNfcUrl } from '../services/nfcParser';
 import type { ParsedNFCe } from '../services/nfcParser';
 import { processReceiptImage } from '../services/ocrService';
@@ -68,40 +69,47 @@ export default function Importar() {
 
     try {
       if (file.type.includes('pdf')) {
-        // PDF parser mock helper
-        setTimeout(() => {
-          const parsedMock: ParsedNFCe = {
-            chaveAcesso: 'PDF' + Math.floor(Math.random() * 10000000000000000),
-            numeroNf: Math.floor(Math.random() * 100).toString(),
-            serie: '1',
-            cnpjEmitente: '12.345.678/0001-90',
-            dataEmissao: new Date(),
-            valorTotal: 58.50,
-            itens: [
-              { descricao: 'OLEO SOJA SOYA 900ML', quantidade: 1, unidade: 'UN', valorUnitario: 6.99 },
-              { descricao: 'SABÃO LIQUIDO OMO 3L', quantidade: 1, unidade: 'UN', valorUnitario: 39.90 },
-              { descricao: 'BISCOITO CLUB SOCIAL 144G', quantidade: 3, unidade: 'UN', valorUnitario: 3.87 }
-            ]
-          };
-          setParsedData(parsedMock);
-          setLocalLoading(false);
-        }, 1500);
-      } else {
-        // OCR Image parser using Tesseract.js
-        const res = await processReceiptImage(file);
-        
-        const parsedMock: ParsedNFCe = {
-          chaveAcesso: 'IMG' + Math.floor(Math.random() * 10000000000000000),
-          numeroNf: Math.floor(Math.random() * 100).toString(),
-          serie: '1',
-          cnpjEmitente: '98.765.432/0001-10',
-          dataEmissao: new Date(),
-          valorTotal: res.valorTotal,
-          itens: res.itens
-        };
-        setParsedData(parsedMock);
+        setErrorMessage('Importação direta de arquivos PDF não suportada no momento. Por favor, envie uma foto/imagem do cupom.');
         setLocalLoading(false);
+        return;
       }
+
+      // 1. Try to scan QR Code from the image file
+      let qrParsed: ParsedNFCe | null = null;
+      try {
+        const html5QrCode = new Html5Qrcode("qr-file-scanner-temp");
+        const decodedText = await html5QrCode.scanFile(file, false);
+        qrParsed = parseNfcUrl(decodedText);
+      } catch (e) {
+        console.log("No QR Code detected in image file, falling back to pure OCR", e);
+      }
+
+      // 2. Process image via OCR to read the text and items
+      const ocrRes = await processReceiptImage(file);
+
+      // 3. Construct final parsed data, prioritizing QR Code metadata over OCR text
+      const finalChave = qrParsed?.chaveAcesso || ocrRes.chaveAcesso || '';
+      const finalCnpj = qrParsed?.cnpjEmitente || ocrRes.cnpjEmitente || '';
+      const finalDate = qrParsed?.dataEmissao || ocrRes.dataEmissao || new Date();
+      const finalNumero = qrParsed?.numeroNf || ocrRes.numeroNf || '';
+      const finalSerie = qrParsed?.serie || ocrRes.serie || '';
+
+      const finalParsed: ParsedNFCe = {
+        chaveAcesso: finalChave,
+        numeroNf: finalNumero,
+        serie: finalSerie,
+        cnpjEmitente: finalCnpj,
+        dataEmissao: finalDate,
+        valorTotal: ocrRes.valorTotal > 0 ? ocrRes.valorTotal : (qrParsed?.valorTotal || 0),
+        itens: ocrRes.itens
+      };
+
+      if (ocrRes.itens.length === 0) {
+        setErrorMessage('Aviso: Não conseguimos ler os produtos da imagem automaticamente. Você pode preencher as informações adicionando itens abaixo.');
+      }
+
+      setParsedData(finalParsed);
+      setLocalLoading(false);
     } catch (err: any) {
       setErrorMessage(`Erro ao ler arquivo: ${err.message || err}`);
       setLocalLoading(false);
@@ -413,6 +421,7 @@ export default function Importar() {
           )}
         </Grid>
       </Grid>
+      <div id="qr-file-scanner-temp" style={{ display: 'none' }} />
     </Box>
   );
 }

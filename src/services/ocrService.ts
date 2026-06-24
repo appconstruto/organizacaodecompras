@@ -9,6 +9,11 @@ export interface OcrResult {
     valorUnitario: number;
   }>;
   valorTotal: number;
+  chaveAcesso?: string;
+  numeroNf?: string;
+  serie?: string;
+  cnpjEmitente?: string;
+  dataEmissao?: Date;
 }
 
 /**
@@ -23,15 +28,71 @@ export async function processReceiptImage(imageFile: File): Promise<OcrResult> {
     
     // Parse items from OCR text using patterns
     const parsed = parseTextReceipt(text);
+    const meta = extractMetadataFromText(text);
     
     return {
       text,
       itens: parsed.itens,
-      valorTotal: parsed.valorTotal
+      valorTotal: parsed.valorTotal,
+      chaveAcesso: meta.chave,
+      numeroNf: meta.numero,
+      serie: meta.serie,
+      cnpjEmitente: meta.cnpj,
+      dataEmissao: meta.date
     };
   } finally {
     await worker.terminate();
   }
+}
+
+/**
+ * Extracts structured receipt metadata from raw text
+ */
+function extractMetadataFromText(text: string): {
+  cnpj: string;
+  chave: string;
+  date: Date;
+  numero: string;
+  serie: string;
+} {
+  const cleanSpaced = text.replace(/\s+/g, '');
+  const chaveMatch = cleanSpaced.match(/\d{44}/);
+  const chave = chaveMatch ? chaveMatch[0] : '';
+
+  let cnpj = '';
+  let date = new Date();
+  let numero = '';
+  let serie = '';
+
+  if (chave && chave.length === 44) {
+    const ano = '20' + chave.substring(2, 4);
+    const mes = chave.substring(4, 6);
+    cnpj = chave.substring(6, 20).replace(/^(\d{2})(\d{3})(\d{3})(\d{4})(\d{2})$/, "$1.$2.$3/$4-$5");
+    serie = parseInt(chave.substring(22, 25), 10).toString();
+    numero = parseInt(chave.substring(25, 34), 10).toString();
+    date = new Date(parseInt(ano, 10), parseInt(mes, 10) - 1, 15, 12, 0, 0);
+  } else {
+    const cnpjMatch = text.match(/(\d{2})\.?(\d{3})\.?(\d{3})\/?(\d{4})-?(\d{2})/);
+    if (cnpjMatch) {
+      cnpj = `${cnpjMatch[1]}.${cnpjMatch[2]}.${cnpjMatch[3]}/${cnpjMatch[4]}-${cnpjMatch[5]}`;
+    }
+
+    const dateMatch = text.match(/(\d{2})\/(\d{2})\/(\d{4})/);
+    if (dateMatch) {
+      date = new Date(parseInt(dateMatch[3], 10), parseInt(dateMatch[2], 10) - 1, parseInt(dateMatch[1], 10), 12, 0, 0);
+    }
+
+    const nfMatch = text.match(/nfc-e\s+(?:no|n°|num)?\s*(\d+)/i) || text.match(/nota:\s*(\d+)/i) || text.match(/nº\s*(\d+)/i);
+    if (nfMatch) {
+      numero = nfMatch[1];
+    }
+    const serieMatch = text.match(/serie\s+(\d+)/i) || text.match(/série\s+(\d+)/i);
+    if (serieMatch) {
+      serie = serieMatch[1];
+    }
+  }
+
+  return { cnpj, chave, date, numero, serie };
 }
 
 /**
@@ -43,7 +104,7 @@ export async function processReceiptImage(imageFile: File): Promise<OcrResult> {
 function parseTextReceipt(text: string): { itens: OcrResult['itens']; valorTotal: number } {
   const lines = text.split('\n');
   const itens: OcrResult['itens'] = [];
-  let valorTotal = 0;
+  let extractedTotal: number | null = null;
 
   const validUnits = ['UN', 'KG', 'LT', 'ML', 'G', 'PC', 'FD', 'CX', 'UNID', 'UND', 'U'];
 
@@ -59,12 +120,37 @@ function parseTextReceipt(text: string): { itens: OcrResult['itens']; valorTotal
     return isNaN(parsed) ? 0 : parsed;
   };
 
+  // First pass: scan for the overall total value and check for products area
   for (const line of lines) {
     const trimmedLine = line.trim();
     if (!trimmedLine) continue;
 
-    // Skip headers and irrelevant lines
-    if (/cnpj|focal|sefaz|cupom|nfc|data|inscricao|vias|cliente|cpf|consumidor|protocolo|tributos/i.test(trimmedLine)) continue;
+    // Detect real total value on lines like "Valor Total R$ 45,89" or "Valor a Pagar R$ 45,89"
+    if (/total|pagar|soma|pgto/i.test(trimmedLine) && !/itens|qtde/i.test(trimmedLine)) {
+      const match = trimmedLine.match(/(?:R\$)?\s*(\d+[,.]\d{2})/i);
+      if (match) {
+        const val = parseLocalFloat(match[1]);
+        if (val > 0 && (!extractedTotal || val > extractedTotal)) {
+          extractedTotal = val;
+        }
+      }
+    }
+  }
+
+  for (const line of lines) {
+    const trimmedLine = line.trim();
+    if (!trimmedLine) continue;
+
+    // 1. Skip lines containing the 44-digit NFC-e access key (even if spaced out)
+    const normalizedDigits = trimmedLine.replace(/\s+/g, '');
+    if (/\d{44}/.test(normalizedDigits)) {
+      continue;
+    }
+
+    // 2. Skip headers, metadata, payment, and totals lines to avoid parsing them as items
+    if (/cnpj|focal|sefaz|cupom|nfc|data|inscricao|vias|cliente|cpf|consumidor|protocolo|tributos|troco|pagamento|cartao|dinheiro|valor|total|pagar/i.test(trimmedLine)) {
+      continue;
+    }
 
     const tokens = trimmedLine.split(/\s+/);
     if (tokens.length < 4) continue;
@@ -102,7 +188,7 @@ function parseTextReceipt(text: string): { itens: OcrResult['itens']; valorTotal
     let qtyVal = parseLocalFloat(tokens[qtyIdx]);
     const unit = unitIdx !== -1 ? tokens[unitIdx].toUpperCase() : 'UN';
 
-    // Skip if price parsing failed
+    // Skip if price parsing failed or values are zero
     if (priceVal <= 0 || totalVal <= 0) continue;
 
     // Heuristic: quantity correction by dividing total price by unit price
@@ -117,34 +203,22 @@ function parseTextReceipt(text: string): { itens: OcrResult['itens']; valorTotal
     const descTokens = tokens.slice(0, qtyIdx);
     let desc = descTokens.join(' ').trim();
 
-    // Clean up code prefix
+    // Clean up code prefix (e.g. "014120 KIMARC" -> "KIMARC")
     desc = desc.replace(/^\d{3,12}\s+/, '');
 
     if (desc && qtyVal > 0 && priceVal > 0) {
-      // Prevent matching totals or payments as items
-      if (!/total|troco|pagamento|cartao|dinheiro|valor|incidentes/i.test(desc)) {
-        itens.push({
-          descricao: desc,
-          quantidade: qtyVal,
-          unidade: unit,
-          valorUnitario: priceVal
-        });
-      }
+      itens.push({
+        descricao: desc,
+        quantidade: qtyVal,
+        unidade: unit,
+        valorUnitario: priceVal
+      });
     }
   }
 
-  // If no items parsed, generate fallback mock items to keep simulation fully functional
-  if (itens.length === 0) {
-    const mockList = [
-      { descricao: 'OLEO SOJA SOYA 900ML', quantidade: 1, unidade: 'UN', valorUnitario: 6.99 },
-      { descricao: 'SABÃO LIQUIDO OMO 3L', quantidade: 1, unidade: 'UN', valorUnitario: 39.90 },
-      { descricao: 'AMACIANTE DOWNY 500ML', quantidade: 2, unidade: 'UN', valorUnitario: 12.80 },
-      { descricao: 'BISCOITO CLUBE SOCIAL 144G', quantidade: 3, unidade: 'UN', valorUnitario: 4.50 }
-    ];
-    itens.push(...mockList);
-  }
+  // Calculate final total (prefer overall total extracted from receipt rodapé, fallback to sum of items)
+  const itemsSum = parseFloat(itens.reduce((acc, it) => acc + (it.quantidade * it.valorUnitario), 0).toFixed(2));
+  const finalTotal = extractedTotal !== null && extractedTotal > 0 ? extractedTotal : itemsSum;
 
-  valorTotal = parseFloat(itens.reduce((acc, it) => acc + (it.quantidade * it.valorUnitario), 0).toFixed(2));
-
-  return { itens, valorTotal };
+  return { itens, valorTotal: finalTotal };
 }

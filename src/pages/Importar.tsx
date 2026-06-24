@@ -106,51 +106,52 @@ export default function Importar() {
       if (edgeFuncError) throw edgeFuncError;
 
       // 3. Construct final parsed data, prioritizing QR Code metadata over OCR text
-      let finalChave = qrParsed?.chaveAcesso || geminiRes.chaveAcesso || '';
-      finalChave = finalChave.replace(/\D/g, '');
+      let finalChave = (qrParsed?.chaveAcesso || geminiRes.chaveAcesso || '').replace(/\D/g, '');
       if (finalChave.length !== 44) {
         finalChave = '';
       }
 
-      let finalCnpj = qrParsed?.cnpjEmitente || geminiRes.cnpj || '';
-      finalCnpj = finalCnpj.replace(/\D/g, '');
+      let finalCnpj = (qrParsed?.cnpjEmitente || geminiRes.cnpj || '').replace(/\D/g, '');
       if (finalCnpj.length === 14) {
         finalCnpj = finalCnpj.replace(/^(\d{2})(\d{3})(\d{3})(\d{4})(\d{2})$/, "$1.$2.$3/$4-$5");
       } else {
-        finalCnpj = '00.000.000/0000-00';
+        finalCnpj = '';
       }
 
-      let finalDate = qrParsed?.dataEmissao;
+      let finalDate: Date | null = qrParsed?.dataEmissao || null;
       if (!finalDate || isNaN(finalDate.getTime())) {
         const parsedGeminiDate = geminiRes.dataEmissao ? new Date(geminiRes.dataEmissao) : null;
         if (parsedGeminiDate && !isNaN(parsedGeminiDate.getTime())) {
           finalDate = parsedGeminiDate;
         } else {
-          finalDate = new Date();
+          finalDate = null;
         }
       }
 
-      let finalNumero = String(qrParsed?.numeroNf || geminiRes.numeroNota || '').replace(/\D/g, '');
-      if (!finalNumero) finalNumero = '000000';
-
-      let finalSerie = String(qrParsed?.serie || geminiRes.serie || '').replace(/\D/g, '');
-      if (!finalSerie) finalSerie = '000';
+      let finalNumero = String(qrParsed?.numeroNf || geminiRes.numeroNota || '').replace(/\D/g, '') || null;
+      let finalSerie = String(qrParsed?.serie || geminiRes.serie || '').replace(/\D/g, '') || null;
+      const finalEmpresa = geminiRes.empresa || null;
 
       const itemsFromGemini = (geminiRes.itens || []).map((it: any) => ({
         descricao: it.descricaoNormalizada || it.descricao || '',
+        descricaoOriginal: it.descricao || '',
+        descricaoNormalizada: it.descricaoNormalizada || '',
         quantidade: parseFloat(it.quantidade) || 1,
         unidade: it.unidade || 'UN',
         valorUnitario: parseFloat(it.valorUnitario) || 0,
-        confidence: it.confidence
+        confidence: it.confidence,
+        marca: it.marca || 'Genérica',
+        categoria: it.categoria || 'Outros'
       }));
 
       const finalParsed: ParsedNFCe = {
-        chaveAcesso: finalChave,
+        chaveAcesso: finalChave || null,
         numeroNf: finalNumero,
         serie: finalSerie,
-        cnpjEmitente: finalCnpj,
+        cnpjEmitente: finalCnpj || null,
         dataEmissao: finalDate,
         valorTotal: parseFloat(geminiRes.valorTotal) || 0,
+        empresa: finalEmpresa,
         itens: itemsFromGemini
       };
 
@@ -340,18 +341,22 @@ export default function Importar() {
                 <Grid container spacing={2} sx={{ mb: 3 }}>
                   <Grid size={6}>
                     <Typography variant="caption" color="text.secondary">CNPJ Emitente</Typography>
-                    <Typography variant="body2" sx={{ fontWeight: 500 }}>{parsedData.cnpjEmitente}</Typography>
+                    <Typography variant="body2" sx={{ fontWeight: 500 }}>
+                      {parsedData.cnpjEmitente || 'Não identificado'}
+                    </Typography>
                   </Grid>
                   <Grid size={6}>
                     <Typography variant="caption" color="text.secondary">Data Emissão</Typography>
                     <Typography variant="body2" sx={{ fontWeight: 500 }}>
-                      {new Date(parsedData.dataEmissao).toLocaleDateString('pt-BR')}
+                      {parsedData.dataEmissao 
+                        ? new Date(parsedData.dataEmissao).toLocaleDateString('pt-BR') 
+                        : 'Não identificada'}
                     </Typography>
                   </Grid>
                   <Grid size={12}>
                     <Typography variant="caption" color="text.secondary">Chave de Acesso</Typography>
                     <Typography variant="body2" sx={{ fontWeight: 500, wordBreak: 'break-all', fontFamily: 'monospace' }}>
-                      {parsedData.chaveAcesso}
+                      {parsedData.chaveAcesso || 'Não identificada'}
                     </Typography>
                   </Grid>
                 </Grid>

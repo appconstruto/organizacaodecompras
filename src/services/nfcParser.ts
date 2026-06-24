@@ -1,16 +1,21 @@
 export interface ParsedNFCe {
-  chaveAcesso: string;
-  numeroNf: string;
-  serie: string;
-  cnpjEmitente: string;
-  dataEmissao: Date;
+  chaveAcesso: string | null;
+  numeroNf: string | null;
+  serie: string | null;
+  cnpjEmitente: string | null;
+  dataEmissao: Date | null;
   valorTotal: number;
+  empresa?: string | null;
   itens: Array<{
     descricao: string;
     quantidade: number;
     unidade: string;
     valorUnitario: number;
     confidence?: number;
+    marca?: string | null;
+    categoria?: string | null;
+    descricaoOriginal?: string | null;
+    descricaoNormalizada?: string | null;
   }>;
 }
 

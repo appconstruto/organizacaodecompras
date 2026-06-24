@@ -32,21 +32,21 @@ serve(async (req) => {
     const prompt = `Analise esta imagem de um cupom fiscal brasileiro e extraia as informações estruturadas.
 Você deve ler os dados reais presentes na imagem do cupom e preencher o JSON de retorno. 
 
-ATENÇÃO:
-1. NÃO retorne os textos explicativos ou placeholders de exemplo (como "CNPJ apenas numeros" ou "AAAA-MM-DD").
-2. Se você NÃO encontrar um campo (como CNPJ, série ou número da nota), retorne null para aquele campo.
-3. Se você não conseguir ler a data de emissão, retorne a data de hoje no formato YYYY-MM-DD.
-4. Identifique o CNPJ do estabelecimento contendo apenas dígitos numéricos.
-5. Identifique a chave de acesso de 44 dígitos se ela estiver visível na imagem (geralmente perto do QR Code ou no topo/fim do cupom). Se não achar, retorne null.
+ATENÇÃO CRÍTICA (NÃO INVENTE DADOS):
+1. Se um campo não puder ser identificado com confiança superior a 80% ou não estiver presente na imagem, retorne null.
+2. NUNCA gere CNPJ fictício (ex: "00.000.000/0000-00"), Número de nota fictício, Série fictícia, Chave de acesso fictícia ou Produtos inexistentes.
+3. Se você NÃO encontrar ou não conseguir ler a data de emissão com certeza, retorne null. NUNCA retorne a data de hoje como fallback.
+4. Identifique o CNPJ do estabelecimento contendo apenas dígitos numéricos (se achar, senão null).
+5. Identifique a chave de acesso de 44 dígitos se ela estiver visível e legível (apenas números, senão null).
 
 Retorne APENAS um objeto JSON válido no formato abaixo:
 {
-  "empresa": "Nome Real do Estabelecimento (ex: Supermercado Silva)",
-  "cnpj": "12345678000199 (apenas os numeros reais)",
-  "chaveAcesso": "352606564400270001506510... (apenas os 44 numeros se achar, senao null)",
-  "numeroNota": "94882 (numero real da nota)",
-  "serie": "103 (serie real da nota)",
-  "dataEmissao": "2026-06-23 (data real extraida)",
+  "empresa": "Nome Real do Estabelecimento (ex: Supermercado Silva) ou null",
+  "cnpj": "12345678000199 (apenas os numeros reais, ou null)",
+  "chaveAcesso": "352606564400270001506510... (apenas os 44 numeros reais, ou null)",
+  "numeroNota": "94882 (numero real da nota, ou null)",
+  "serie": "103 (serie real da nota, ou null)",
+  "dataEmissao": "2026-06-23 (data real no formato YYYY-MM-DD, ou null)",
   "valorTotal": 45.89,
   "itens": [
     {

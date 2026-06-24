@@ -1,6 +1,5 @@
 import { create } from 'zustand';
 import { supabase } from '../services/supabaseClient';
-import { normalizeProductWithAI } from '../services/geminiNormalizer';
 import type { NormalizedProduct } from '../services/productNormalizer';
 import type { ParsedNFCe } from '../services/nfcParser';
 
@@ -19,6 +18,7 @@ interface Purchase {
   valor_total: number;
   origem_importacao: string;
   nota_fiscal_id?: string;
+  status?: string;
   itens?: PurchaseItem[];
 }
 
@@ -130,16 +130,16 @@ export const useAppStore = create<AppState>((set, get) => ({
 
       let notaFiscalId = null;
 
-      // 2. Save invoice details
-      if (parsed.chaveAcesso) {
+      // 2. Save invoice details (supporting nullable values)
+      if (parsed.chaveAcesso || parsed.cnpjEmitente || parsed.numeroNf) {
         const { data: newNf, error: nfInsertErr } = await supabase
           .from('notas_fiscais')
           .insert({
-            chave_acesso: parsed.chaveAcesso,
-            numero_nf: parsed.numeroNf,
-            serie: parsed.serie,
-            cnpj_emitente: parsed.cnpjEmitente,
-            data_emissao: parsed.dataEmissao.toISOString(),
+            chave_acesso: parsed.chaveAcesso || null,
+            numero_nf: parsed.numeroNf || null,
+            serie: parsed.serie || null,
+            cnpj_emitente: parsed.cnpjEmitente || null,
+            data_emissao: parsed.dataEmissao ? parsed.dataEmissao.toISOString() : null,
             valor_total: parsed.valorTotal
           })
           .select('id')
@@ -150,71 +150,117 @@ export const useAppStore = create<AppState>((set, get) => ({
       }
 
       // 3. Save main purchase row
-      // We extract market name from emitter CNPJ (or mock it elegantly for V1)
-      const marketName = parsed.cnpjEmitente === '00.000.000/0000-00' 
-        ? 'Supermercado Exemplo' 
-        : `Supermercado Cód. ${parsed.cnpjEmitente.substring(0, 5)}`;
+      // Use company name from Gemini (parsed.empresa) as the market name, with elegant fallback
+      let marketName = parsed.empresa || null;
+      if (!marketName) {
+        marketName = parsed.cnpjEmitente 
+          ? `Supermercado Cód. ${parsed.cnpjEmitente.replace(/\D/g, '').substring(0, 5)}`
+          : 'Supermercado Desconhecido';
+      }
+
+      const totalCalculado = parsed.itens.reduce((sum, item) => sum + (item.quantidade * item.valorUnitario), 0);
+      const isDiscrepant = parsed.valorTotal > 0 && Math.abs(totalCalculado - parsed.valorTotal) > 0.10;
+      const status = isDiscrepant ? 'revisao' : 'processado';
 
       const { data: newPurchase, error: purchaseErr } = await supabase
         .from('compras')
         .insert({
-          data: parsed.dataEmissao.toISOString(),
+          data: parsed.dataEmissao ? parsed.dataEmissao.toISOString() : new Date().toISOString(),
           mercado: marketName,
-          valor_total: parsed.valorTotal,
+          valor_total: parsed.valorTotal > 0 ? parsed.valorTotal : totalCalculado,
           origem_importacao: method,
-          nota_fiscal_id: notaFiscalId
+          nota_fiscal_id: notaFiscalId,
+          status: status
         })
         .select('id')
         .single();
 
       if (purchaseErr) throw purchaseErr;
 
-      // 4. Save items (resolving products and historical prices)
+      // 4. Resolve products using caching and batch AI normalization
+      const originalDescs = parsed.itens.map(it => it.descricao.toUpperCase().trim());
+      
+      const { data: cachedAliases, error: cacheErr } = await supabase
+        .from('produto_alias')
+        .select('descricao_original, produto_id')
+        .in('descricao_original', originalDescs);
+
+      if (cacheErr) throw cacheErr;
+
+      const cacheMap = new Map<string, string>();
+      if (cachedAliases) {
+        cachedAliases.forEach(alias => {
+          cacheMap.set(alias.descricao_original.toUpperCase().trim(), alias.produto_id);
+        });
+      }
+
+      const itemsToNormalize = parsed.itens.filter(item => !cacheMap.has(item.descricao.toUpperCase().trim()));
+
+      let normalizedResults: NormalizedProduct[] = [];
+      if (itemsToNormalize.length > 0) {
+        const { normalizeProductsWithAI } = await import('../services/geminiNormalizer');
+        normalizedResults = await normalizeProductsWithAI(
+          itemsToNormalize.map(it => ({ descricao: it.descricao, unidade: it.unidade }))
+        );
+      }
+
+      let normalResultIdx = 0;
+
+      // 5. Save items
       for (const item of parsed.itens) {
-        // Normalize description and unit using Gemini AI if key is present
-        const normalized: NormalizedProduct = await normalizeProductWithAI(item.descricao, item.unidade);
+        const descClean = item.descricao.toUpperCase().trim();
+        let productId = cacheMap.get(descClean) || '';
 
-        // Find or create product in DB
-        let productId = '';
-        const { data: existingProduct, error: prodFindErr } = await supabase
-          .from('produtos')
-          .select('id, unidade_base, categoria_id')
-          .eq('nome_padronizado', normalized.nomePadronizado)
-          .maybeSingle();
-
-        if (prodFindErr) throw prodFindErr;
-
-        if (existingProduct) {
-          productId = existingProduct.id;
+        if (!productId) {
+          const normalized = normalizedResults[normalResultIdx++];
           
-          // Auto-upgrade base unit and category if the existing one is generic ('unidades' or 'Outros')
-          // but we now have a specific one (e.g. 'kg' or 'L')
-          const needsUnitUpgrade = existingProduct.unidade_base === 'unidades' && normalized.unidadeBase !== 'unidades';
-          const needsCategoryUpgrade = existingProduct.categoria_id === 10 && normalized.categoriaId !== 10;
-          
-          if (needsUnitUpgrade || needsCategoryUpgrade) {
-            await supabase
-              .from('produtos')
-              .update({
-                unidade_base: needsUnitUpgrade ? normalized.unidadeBase : existingProduct.unidade_base,
-                categoria_id: needsCategoryUpgrade ? normalized.categoriaId : existingProduct.categoria_id
-              })
-              .eq('id', productId);
-          }
-        } else {
-          const { data: newProduct, error: prodCreateErr } = await supabase
+          // Find or create product in DB
+          const { data: existingProduct, error: prodFindErr } = await supabase
             .from('produtos')
-            .insert({
-              nome_padronizado: normalized.nomePadronizado,
-              marca: normalized.marca,
-              categoria_id: normalized.categoriaId,
-              unidade_base: normalized.unidadeBase
-            })
-            .select('id')
-            .single();
+            .select('id, unidade_base, categoria_id')
+            .eq('nome_padronizado', normalized.nomePadronizado)
+            .maybeSingle();
 
-          if (prodCreateErr) throw prodCreateErr;
-          productId = newProduct.id;
+          if (prodFindErr) throw prodFindErr;
+
+          if (existingProduct) {
+            productId = existingProduct.id;
+            
+            const needsUnitUpgrade = existingProduct.unidade_base === 'unidades' && normalized.unidadeBase !== 'unidades';
+            const needsCategoryUpgrade = existingProduct.categoria_id === 10 && normalized.categoriaId !== 10;
+            
+            if (needsUnitUpgrade || needsCategoryUpgrade) {
+              await supabase
+                .from('produtos')
+                .update({
+                  unidade_base: needsUnitUpgrade ? normalized.unidadeBase : existingProduct.unidade_base,
+                  categoria_id: needsCategoryUpgrade ? normalized.categoriaId : existingProduct.categoria_id
+                })
+                .eq('id', productId);
+            }
+          } else {
+            const { data: newProduct, error: prodCreateErr } = await supabase
+              .from('produtos')
+              .insert({
+                nome_padronizado: normalized.nomePadronizado,
+                marca: normalized.marca,
+                categoria_id: normalized.categoriaId,
+                unidade_base: normalized.unidadeBase
+              })
+              .select('id')
+              .single();
+
+            if (prodCreateErr) throw prodCreateErr;
+            productId = newProduct.id;
+          }
+
+          // Insert into cache alias table
+          await supabase
+            .from('produto_alias')
+            .insert({
+              descricao_original: descClean,
+              produto_id: productId
+            });
         }
 
         // Convert sub-units to base units (g -> kg, ml -> L)
@@ -248,11 +294,12 @@ export const useAppStore = create<AppState>((set, get) => ({
         if (itemInsertErr) throw itemInsertErr;
 
         // Insert historical price entry
+        const dateStr = parsed.dataEmissao ? parsed.dataEmissao.toISOString() : new Date().toISOString();
         await supabase
           .from('historico_precos')
           .insert({
             produto_id: productId,
-            data: parsed.dataEmissao.toISOString(),
+            data: dateStr,
             preco: item.valorUnitario
           });
       }
